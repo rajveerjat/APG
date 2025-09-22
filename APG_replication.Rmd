@@ -1,0 +1,1075 @@
+---
+title: 'Agricultural Productivity Gap : Replication Code'
+author: "Rajveer"
+date: '2024-01-27'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+***Introduction***
+
+This R-markdown provides codes to reproduce the tables and figures of the paper 
+"Jat Rajveer and Ramaswami Bharat (2026). ``The agricultural productivity gap: Informality matters'', 
+Journal of Development Economics, Volume 178, January 2026, 103617". 
+
+
+
+*******************************************************************************
+*         Table-1                                                         *
+*******************************************************************************
+
+```{r}
+Two_sectors = function(df) {
+  library(dplyr)
+  klems =df
+  klems = klems %>% filter(!sector27 %in% c("coke_petro_nuclear", "admin_defense_socialsecurity"))
+
+  years_va = c("1999_00", "2004_05", "2011_12", "2018_19", "2022_23")
+  years = c(1999, 2004, 2011, 2018, 2022)
+
+  va_vars = paste0("VA_r", years_va); emp_vars = paste0("EMP", years_va)
+  edu_vars = paste0("edu_yrs", years_va); hours_vars = paste0("hours", years_va)
+  lsh_vars = paste0("LSH_VA", years_va)
+
+  results = lapply(seq_along(years), function(i) {
+    yr = years[i]; va = va_vars[i]; emp = emp_vars[i]
+    edu = edu_vars[i]; hours = hours_vars[i]; lsh = lsh_vars[i]
+
+    # VA_per_worker for non-agri = sum(VA_r) / sum(EMP)
+    nonagri = klems %>% filter(sector27 != "agri_forest_fish")
+    VA_per_worker_nonagri = 10000*sum(nonagri[[va]], na.rm=TRUE) / sum(nonagri[[emp]], na.rm=TRUE)
+
+    # Edu_yrs weighted by EMP
+    edu_nonagri = weighted.mean(nonagri[[edu]], nonagri[[emp]], na.rm=TRUE)
+
+    # Hours weighted by EMP
+    hours_nonagri = weighted.mean(nonagri[[hours]], nonagri[[emp]], na.rm=TRUE)
+
+    # LSH_VA weighted by VA_r
+    lsh_nonagri = weighted.mean(nonagri[[lsh]], nonagri[[va]], na.rm=TRUE)
+
+    # Agri averages (unweighted mean)
+    agri = klems %>% filter(sector27 == "agri_forest_fish")
+    VA_per_worker_agri = 10000*sum(agri[[va]], na.rm=TRUE) / sum(agri[[emp]], na.rm=TRUE)
+    edu_agri = mean(agri[[edu]], na.rm=TRUE)
+    hours_agri = mean(agri[[hours]], na.rm=TRUE)
+    lsh_agri = mean(agri[[lsh]], na.rm=TRUE)
+
+    tibble(
+      year = yr, 
+      VA_agri = VA_per_worker_agri,VA_nonagri = VA_per_worker_nonagri, 
+      EDU_agri = edu_agri,EDU_nonagri = edu_nonagri,
+      HOURS_agri = hours_agri, HOURS_nonagri = hours_nonagri,
+      LSH_agri = lsh_agri, LSH_nonagri = lsh_nonagri 
+      )
+  })
+
+  bind_rows(results)
+}
+
+
+df=read.csv("D:/Research/APG/revision1/data/KLEMS/cleaned/KLEMS_NSS_PLFS_IHDS_APG_workfile.csv")
+
+df2=Two_sectors(df)
+
+df2$raw_APG = round(df2$VA_nonagri / df2$VA_agri, 3)
+df2$hours_adj_fact = round(df2$HOURS_nonagri / df2$HOURS_agri, 3)
+df2$LSH_adj_fact = round(df2$LSH_agri / df2$LSH_nonagri, 3)
+# df2$LSH_adj_fact = 1  # Uncomment this if you want to override with 1 (which Gollin Lagakos and Waugh (QJE, 2014) does)
+df2$Hcap_adj_fact = round(exp(0.07 * df2$EDU_nonagri) / exp(0.07 * df2$EDU_agri), 3)
+
+df2$correct_APG = (df2$raw_APG) / (df2$hours_adj_fact * df2$Hcap_adj_fact*df2$LSH_adj_fact )
+  
+cat("The first row of Table-1 is: ", df2$raw_APG)
+cat("\n The second row of Table-1 is: ", df2$correct_APG)
+```
+
+
+
+
+*******************************************************************************
+*    Table-2: Lists All Data Sources (No numbers/codes applicable) 
+*******************************************************************************
+
+
+
+
+*******************************************************************************
+*   Table-3: Informal employment (%) employment in non-farm industry divisions. 
+*******************************************************************************
+
+
+The data_table3.csv contains the numbers reported in table-2. We have cleaned NSS and PLFS files to get these numbers.
+The cleaning steps (e.g. definition of informal sector, weighting schemes) are discussed in the paper. 
+
+
+```{r}
+df=read.csv("D:/Research/APG/revision1/data/KLEMS/cleaned/KLEMS_NSS_PLFS_IHDS_APG_workfile.csv")
+df = df %>% filter(!sector27 %in% c("coke_petro_nuclear", "admin_defense_socialsecurity"))
+
+df_input= df %>% arrange(desc(unorg_2022_23))   
+df_input= df_input[1:nrow(df)-1, ]  #dropping agriculture sector
+
+
+table_3=cbind(df_input$sector27,round(df_input$unorg_1999_00,2), round(df_input$unorg_2004_05,2), round(df_input$unorg_2011_12,2),round(df_input$unorg_2018_19,2), round(df_input$unorg_2022_23,2))
+
+print(table_3)
+```
+
+
+
+***Main Table of the Paper***
+
+
+*******************************************************************************
+*    Table-4                                                         *
+*******************************************************************************
+
+
+*Data Prep*
+
+
+**employment + closeness to formal weight**
+```{r}
+
+informal_agg_EMP_dev_wt = function(threshold = 66) {
+ 
+  library(haven); library(dplyr)
+    
+  klems = read.csv("D:/Research/APG/revision1/data/KLEMS/cleaned/KLEMS_NSS_PLFS_IHDS_APG_workfile.csv")
+  klems = klems %>% filter(!sector27 %in% c("coke_petro_nuclear", "admin_defense_socialsecurity"))   # drop outlier sectors
+
+  
+  years_va = c("1999_00", "2004_05", "2011_12", "2018_19", "2022_23"); years = c("1999", "2004", "2011", "2018", "2022")
+
+  va_vars = paste0("VA_r", years_va)       # e.g., VA_r1999_00
+  emp_vars = paste0("EMP", years_va)       # e.g., EMP1999_00
+  edu_vars = paste0("edu_yrs", years_va)   # e.g., edu_yrs1999_00
+  hours_vars = paste0("hours", years_va)
+
+  for (i in seq_along(years)) {
+    klems[[paste0("VAperworker", years[i])]] = 10000 * (klems[[va_vars[i]]] / klems[[emp_vars[i]]])
+   }
+
+  # Compute representativeness indicators and EMP-based weights
+ for (i in seq_along(years)) {
+  yr = years[i]
+  yr_va = years_va[i]  # still used to pick correct unorg/org% year
+  emp_var = emp_vars[i]
+
+  # Representativeness indicators
+  klems[[paste0("unorg_rep", yr)]] = as.integer(
+    klems[[paste0("unorg_", yr_va)]] > threshold & klems$sector27 != "agri_forest_fish"
+  )
+
+  klems[[paste0("org_", yr_va)]] = 100 - klems[[paste0("unorg_", yr_va)]]
+
+  klems[[paste0("org_rep", yr)]] = as.integer(
+    klems[[paste0("org_", yr_va)]] > threshold & klems$sector27 != "agri_forest_fish"
+  )
+
+  ### --- UNORG WEIGHTS (EMP based) --- ###
+  EMP_unorg = klems[[emp_var]] * klems[[paste0("unorg_rep", yr)]]
+  total_EMP_unorg = sum(EMP_unorg, na.rm = TRUE)
+  klems[[paste0("w_labor_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1,
+                                                 EMP_unorg / total_EMP_unorg, 0)
+
+  deviation_sq_unorg = (klems[[paste0("unorg_", yr_va)]] - threshold)^2
+  #deviation_sq_unorg = (klems[[paste0("unorg_", yr_va)]] - threshold)
+  deviation_sq_unorg[is.na(deviation_sq_unorg)] = 0
+  deviation_sq_unorg = deviation_sq_unorg * klems[[paste0("unorg_rep", yr)]]
+  total_dev_unorg = sum(deviation_sq_unorg, na.rm = TRUE)
+  klems[[paste0("w_dev_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1, deviation_sq_unorg / total_dev_unorg, 0)
+
+  klems[[paste0("w_tilde_unorg_", yr)]] =
+    klems[[paste0("w_labor_unorg_", yr)]] * klems[[paste0("w_dev_unorg_", yr)]]
+
+  total_wtilde_unorg = sum(klems[[paste0("w_tilde_unorg_", yr)]], na.rm = TRUE)
+  klems[[paste0("w_star_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1,
+                                                klems[[paste0("w_tilde_unorg_", yr)]] / total_wtilde_unorg, 0)
+
+  ### --- ORG WEIGHTS (EMP based) --- ###
+  EMP_org = klems[[emp_var]] * klems[[paste0("org_rep", yr)]]
+  total_EMP_org = sum(EMP_org, na.rm = TRUE)
+  klems[[paste0("w_labor_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1, EMP_org / total_EMP_org, 0)
+
+  deviation_sq_org = (klems[[paste0("org_", yr_va)]] - threshold)^2
+  deviation_sq_org[is.na(deviation_sq_org)] = 0
+  deviation_sq_org = deviation_sq_org * klems[[paste0("org_rep", yr)]]
+  total_dev_org = sum(deviation_sq_org, na.rm = TRUE)
+  klems[[paste0("w_dev_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1, deviation_sq_org / total_dev_org, 0)
+
+  klems[[paste0("w_tilde_org_", yr)]] =
+    klems[[paste0("w_labor_org_", yr)]] * klems[[paste0("w_dev_org_", yr)]]
+
+  total_wtilde_org = sum(klems[[paste0("w_tilde_org_", yr)]], na.rm = TRUE)
+  klems[[paste0("w_star_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1, klems[[paste0("w_tilde_org_", yr)]] / total_wtilde_org, 0)
+  }
+
+  # Compute VA per worker using EMPxdev^2 weights
+  for (i in seq_along(years)) {
+    yr = years[i]
+    va = paste0("VAperworker", yr)
+
+    VA_unorg = sum(klems[[paste0("w_star_unorg_", yr)]] * klems[[va]], na.rm = TRUE)
+    assign(paste0("VAperworker_unorg_", yr, "_th_", threshold), VA_unorg, envir = .GlobalEnv)
+
+    VA_org = sum(klems[[paste0("w_star_org_", yr)]] * klems[[va]], na.rm = TRUE)
+    assign(paste0("VAperworker_org_", yr, "_th_", threshold), VA_org, envir = .GlobalEnv)
+
+    VA_agri = klems %>%
+      filter(sector27 == "agri_forest_fish") %>%
+      summarise(value = mean(.data[[va]], na.rm = TRUE)) %>%
+      pull(value)
+    assign(paste0("VAperworker_agri_", yr, "_th_", threshold), VA_agri, envir = .GlobalEnv)
+  }
+
+  # Compute hours using EMPxdev^2 weights
+  for (i in seq_along(years)) {
+    yr = years[i]
+    hours_var = hours_vars[i]
+
+    hours_unorg = sum(klems[[paste0("w_star_unorg_", yr)]] * klems[[hours_var]], na.rm = TRUE)
+    assign(paste0("hours_unorg_", yr, "_th_", threshold), hours_unorg, envir = .GlobalEnv)
+
+    hours_org = sum(klems[[paste0("w_star_org_", yr)]] * klems[[hours_var]], na.rm = TRUE)
+    assign(paste0("hours_org_", yr, "_th_", threshold), hours_org, envir = .GlobalEnv)
+
+    hours_agri = klems %>%
+      filter(sector27 == "agri_forest_fish") %>%
+      summarise(value = mean(.data[[hours_var]], na.rm = TRUE)) %>%
+      pull(value)
+    assign(paste0("hours_agri_", yr, "_th_", threshold), hours_agri, envir = .GlobalEnv)
+  }
+
+  # Compute education years using EMPxdev^2 based weights
+  for (i in seq_along(years)) {
+    yr = years[i]
+    edu_var = edu_vars[i]
+
+    edu_unorg = sum(klems[[paste0("w_star_unorg_", yr)]] * klems[[edu_var]], na.rm = TRUE)
+    assign(paste0("edu_yrs_unorg_", yr, "_th_", threshold), edu_unorg, envir = .GlobalEnv)
+
+    edu_org = sum(klems[[paste0("w_star_org_", yr)]] * klems[[edu_var]], na.rm = TRUE)
+    assign(paste0("edu_yrs_org_", yr, "_th_", threshold), edu_org, envir = .GlobalEnv)
+
+    edu_agri = klems %>%
+      filter(sector27 == "agri_forest_fish") %>%
+      summarise(value = mean(.data[[edu_var]], na.rm = TRUE)) %>%
+      pull(value)
+    assign(paste0("edu_yrs_agri_", yr, "_th_", threshold), edu_agri, envir = .GlobalEnv)
+  }
+
+  
+  
+  # Compute representativeness indicators and VA-based weights
+  for (i in seq_along(years)) {
+    yr = years[i]
+    yr_va = years_va[i]
+
+    # Representativeness indicators
+    klems[[paste0("unorg_rep", yr)]] = as.integer(
+      klems[[paste0("unorg_", yr_va)]] > threshold & klems$sector27 != "agri_forest_fish"
+    )
+    
+    klems[[paste0("org_", yr_va)]] = 100 - klems[[paste0("unorg_", yr_va)]]
+    
+    klems[[paste0("org_rep", yr)]] = as.integer(
+      klems[[paste0("org_", yr_va)]] > threshold & klems$sector27 != "agri_forest_fish"
+    )
+
+    ### --- UNORG WEIGHTS (VA based) --- ###
+    VA_unorg = klems[[va_vars[i]]] * klems[[paste0("unorg_rep", yr)]]
+    total_VA_unorg = sum(VA_unorg, na.rm = TRUE)
+    klems[[paste0("w_labor_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1,
+                                                   VA_unorg / total_VA_unorg, 0)
+
+    deviation_sq_unorg = (klems[[paste0("unorg_", yr_va)]] - threshold)^2
+    #deviation_sq_unorg = (klems[[paste0("unorg_", yr_va)]] - threshold)
+    deviation_sq_unorg[is.na(deviation_sq_unorg)] = 0
+    deviation_sq_unorg = deviation_sq_unorg * klems[[paste0("unorg_rep", yr)]]
+    total_dev_unorg = sum(deviation_sq_unorg, na.rm = TRUE)
+    klems[[paste0("w_dev_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1,
+                                                 deviation_sq_unorg / total_dev_unorg, 0)
+
+    klems[[paste0("w_tilde_unorg_", yr)]] =
+      klems[[paste0("w_labor_unorg_", yr)]] * klems[[paste0("w_dev_unorg_", yr)]]
+
+    total_wtilde_unorg = sum(klems[[paste0("w_tilde_unorg_", yr)]], na.rm = TRUE)
+    klems[[paste0("w_star_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1,
+                                                  klems[[paste0("w_tilde_unorg_", yr)]] / total_wtilde_unorg, 0)
+
+    ### --- ORG WEIGHTS (VA based) --- ###
+    VA_org = klems[[va_vars[i]]] * klems[[paste0("org_rep", yr)]]
+    total_VA_org = sum(VA_org, na.rm = TRUE)
+    klems[[paste0("w_labor_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1,
+                                                 VA_org / total_VA_org, 0)
+
+    deviation_sq_org = (klems[[paste0("org_", yr_va)]] - threshold)^2
+    deviation_sq_org[is.na(deviation_sq_org)] = 0
+    deviation_sq_org = deviation_sq_org * klems[[paste0("org_rep", yr)]]
+    total_dev_org = sum(deviation_sq_org, na.rm = TRUE)
+    klems[[paste0("w_dev_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1,
+                                               deviation_sq_org / total_dev_org, 0)
+
+    klems[[paste0("w_tilde_org_", yr)]] =
+      klems[[paste0("w_labor_org_", yr)]] * klems[[paste0("w_dev_org_", yr)]]
+
+    total_wtilde_org = sum(klems[[paste0("w_tilde_org_", yr)]], na.rm = TRUE)
+    klems[[paste0("w_star_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1,
+                                                klems[[paste0("w_tilde_org_", yr)]] / total_wtilde_org, 0)
+   }
+  
+  
+  
+  
+  
+  # Compute LSH_VA aggregates with VA-based weights
+  for (i in seq_along(years)) {
+    yr = years[i]
+    lsh = paste0("LSH_VA", years_va[i])  # e.g., LSH_VA1999_00
+
+    assign(paste0("LSH_VA_unorg_", yr, "_th_", threshold),
+           sum(klems[[paste0("w_star_unorg_", yr)]] * klems[[lsh]], na.rm = TRUE),
+           envir = .GlobalEnv)
+
+    assign(paste0("LSH_VA_org_", yr, "_th_", threshold),
+           sum(klems[[paste0("w_star_org_", yr)]] * klems[[lsh]], na.rm = TRUE),
+           envir = .GlobalEnv)
+
+    agri_val = klems %>%
+      filter(sector27 == "agri_forest_fish") %>%
+      summarise(value = mean(.data[[lsh]], na.rm = TRUE)) %>%
+      pull(value)
+    assign(paste0("LSH_VA_agri_", yr, "_th_", threshold), agri_val, envir = .GlobalEnv)
+  }
+
+  # Prepare and return summary tibble
+  final_results = tibble(
+    year = years,
+    VA_agri = sapply(years, function(yr) get(paste0("VAperworker_agri_", yr, "_th_", threshold))),
+    VA_unorg = sapply(years, function(yr) get(paste0("VAperworker_unorg_", yr, "_th_", threshold))),
+    VA_org = sapply(years, function(yr) get(paste0("VAperworker_org_", yr, "_th_", threshold))),
+
+    LSH_agri = sapply(years, function(yr) get(paste0("LSH_VA_agri_", yr, "_th_", threshold))),
+    LSH_unorg = sapply(years, function(yr) get(paste0("LSH_VA_unorg_", yr, "_th_", threshold))),
+    LSH_org = sapply(years, function(yr) get(paste0("LSH_VA_org_", yr, "_th_", threshold))),
+
+    EDU_agri = sapply(years, function(yr) get(paste0("edu_yrs_agri_", yr, "_th_", threshold))),
+    EDU_unorg = sapply(years, function(yr) get(paste0("edu_yrs_unorg_", yr, "_th_", threshold))),
+    EDU_org = sapply(years, function(yr) get(paste0("edu_yrs_org_", yr, "_th_", threshold))),
+    
+    HOURS_agri = sapply(years, function(yr) get(paste0("hours_agri_", yr, "_th_", threshold))),
+    HOURS_unorg = sapply(years, function(yr) get(paste0("hours_unorg_", yr, "_th_", threshold))),
+    HOURS_org = sapply(years, function(yr) get(paste0("hours_org_", yr, "_th_", threshold)))
+  ) %>% mutate(threshold = threshold)
+
+  return(final_results)
+}
+
+
+thres=66
+df_66 = lapply(thres, informal_agg_EMP_dev_wt) %>%bind_rows()
+df_all = lapply(seq(50, 85, 5), informal_agg_EMP_dev_wt) %>%bind_rows()
+
+```
+
+
+
+
+***Table-4***
+
+$$
+\begin{aligned}
+\text{unorg raw APG} &= \frac{VA_{unorg}}{VA_{agri}} \quad & \text{org raw APG} &= \frac{VA_{org}}{VA_{agri}} \\[6pt]
+\text{unorg hours adj fact} &= \frac{HOURS_{unorg}}{HOURS_{agri}} \quad & \text{org hours adj fact} &= \frac{HOURS_{org}}{HOURS_{agri}} \\[6pt]
+\text{unorg LSH adj fact} &= \frac{LSH_{agri}}{LSH_{unorg}} \quad & \text{org LSH adj fact} &= \frac{LSH_{agri}}{LSH_{org}} \\[6pt]
+\text{unorg Hcap adj fact} &= \frac{\exp(0.07 \times EDU_{unorg})}{\exp(0.07 \times EDU_{agri})} \quad & \text{org Hcap adj fact} &= \frac{\exp(0.07 \times EDU_{org})}{\exp(0.07 \times EDU_{agri})}
+\end{aligned}
+$$
+
+
+
+$$
+\begin{aligned}
+\text{unorg correct APG} &= \frac{\text{unorg raw APG}}{\text{unorg hours adj fact} \times \text{unorg Hcap adj fact} \times \text{unorg LSH adj fact}} \\[6pt]
+\text{org correct APG} &= \frac{\text{org raw APG}}{\text{org hours adj fact} \times \text{org Hcap adj fact} \times \text{org LSH adj fact}}
+\end{aligned}
+$$
+
+
+
+
+```{r}
+df= lapply(66, informal_agg_EMP_dev_wt) %>% bind_rows()
+
+df$unorg_raw_APG = round(df$VA_unorg / df$VA_agri, 3)
+df$org_raw_APG   = round(df$VA_org / df$VA_agri, 3)
+
+df$unorg_hours_adj_fact = round(df$HOURS_unorg / df$HOURS_agri, 3)
+df$org_hours_adj_fact   = round(df$HOURS_org / df$HOURS_agri, 3)
+
+df$unorg_LSH_adj_fact = round(df$LSH_agri / df$LSH_unorg, 3)
+df$org_LSH_adj_fact   = round(df$LSH_agri / df$LSH_org, 3)
+
+df$unorg_Hcap_adj_fact = round(exp(0.07 * df$EDU_unorg) / exp(0.07 * df$EDU_agri), 3)
+df$org_Hcap_adj_fact   = round(exp(0.07 * df$EDU_org) / exp(0.07 * df$EDU_agri), 3)
+
+
+df$unorg_correct_APG = (df$unorg_raw_APG) / (df$unorg_hours_adj_fact * df$unorg_Hcap_adj_fact*df$unorg_LSH_adj_fact )
+  
+df$org_correct_APG = (df$org_raw_APG) / (df$org_hours_adj_fact * df$org_Hcap_adj_fact*df$org_LSH_adj_fact )
+
+df$org_unorg_APG_ratio=df$org_correct_APG/df$unorg_correct_APG
+
+
+
+#Printing: Table-4
+  #Panle-A
+cat("\n Panel-A of Table-4 is:")
+cat("\n First row of Panel-A of Table-4 is:", df$unorg_raw_APG)
+cat("\n Second row of Panel-A of Table-4 is:", df$org_raw_APG, "\n")
+
+ #Panle-B
+cat("\n Panel-B of Table-4 is:")
+cat("\n First row of Panel-B of Table-4 is:", df$LSH_agri)
+cat("\n Second row of Panel-B of Table-4 is:", df$LSH_unorg)
+cat("\n Third row of Panel-B of Table-4 is:", df$LSH_org, "\n")
+
+ #Panel-C 
+cat("\n Panel-C of Table-4 is:")
+cat("\n First row of Panel-C of Table-4 is:", df$unorg_hours_adj_fact)
+cat("\n Second row of Panel-C of Table-4 is:", df$org_hours_adj_fact, "\n")
+
+ #Panel-D
+cat("\n Panel-D of Table-4 is:")
+cat("\n First row of Panel-D of Table-4 is:", df$EDU_agri)
+cat("\n Second row of Panel-D of Table-4 is:", df$EDU_unorg)
+cat("\n Third row of Panel-D of Table-4 is:", df$EDU_org, "\n")
+
+ #Panle-E 
+cat("\n Panel-E of Table-4 is:")
+cat("\n First row of Panel-E of Table-4 is:", df$unorg_Hcap_adj_fact)
+cat("\n Second row of Panel-E of Table-4 is:", df$org_Hcap_adj_fact, "\n")
+
+ #Panel-F
+cat("\n Panel-F of Table-4 is:")
+cat("\n First row of Panel-F of Table-4 is:", df$unorg_correct_APG)
+cat("\n Second row of Panel-F of Table-4 is:", df$org_correct_APG, "\n")
+
+#Panel-G 
+cat("\n Panel-G of Table-4 is:")
+cat("\n First row of Panel-G of Table-4 is:", df$org_unorg_APG_ratio)
+
+```
+
+
+
+
+********************************************************************
+**  Figure-1 : Corrected APG for Non-farm Sector and Choice of Threshold
+*********************************************************************
+
+```{r, warning=F}
+library(ggplot2)
+library(reshape2)
+
+df=df_all
+df$unorg_raw_APG = round(df$VA_unorg / df$VA_agri, 3)
+df$org_raw_APG   = round(df$VA_org / df$VA_agri, 3)
+
+df$unorg_hours_adj_fact = round(df$HOURS_unorg / df$HOURS_agri, 3)
+df$org_hours_adj_fact   = round(df$HOURS_org / df$HOURS_agri, 3)
+
+df$unorg_LSH_adj_fact = round(df$LSH_agri / df$LSH_unorg, 3)
+df$org_LSH_adj_fact   = round(df$LSH_agri / df$LSH_org, 3)
+
+df$unorg_Hcap_adj_fact = round(exp(0.07 * df$EDU_unorg) / exp(0.07 * df$EDU_agri), 3)
+df$org_Hcap_adj_fact   = round(exp(0.07 * df$EDU_org) / exp(0.07 * df$EDU_agri), 3)
+
+
+df$unorg_correct_APG = (df$unorg_raw_APG) / (df$unorg_hours_adj_fact * df$unorg_Hcap_adj_fact*df$unorg_LSH_adj_fact )
+  
+df$org_correct_APG = (df$org_raw_APG) / (df$org_hours_adj_fact * df$org_Hcap_adj_fact*df$org_LSH_adj_fact )
+
+df$org_unorg_APG_ratio=df$org_correct_APG/df$unorg_correct_APG
+
+# Prepare the data
+df_plot = df[, c("threshold", "unorg_correct_APG", "org_correct_APG")]
+df_melted = melt(df_plot, id.vars = "threshold", variable.name = "Sector", value.name = "Corrected_APG")
+
+# Rename for clarity
+df_melted$Sector = ifelse(df_melted$Sector == "unorg_correct_APG", "Primarily Informal", "Primarily Formal")
+
+# Plot
+figure1=ggplot(df_melted, aes(x = threshold, y = Corrected_APG, color = Sector)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1.2) +
+  geom_hline(yintercept = 1, linetype = "dotted", color = "black", linewidth = 0.5) +
+  geom_vline(xintercept = 66, linetype = "dotted", color = "black", linewidth = 0.5) +
+  annotate("text", x = 55, y = 1.02, label = "APG = 1", hjust = 1, size = 3.5, color = "black") +
+  annotate("text", x = 66, y = 0.2, label = "Our threshold", hjust = 1, size = 3.5, color = "green") +
+  geom_hline(yintercept = 0, linetype = "solid", color = "black", linewidth = 0.7) +
+  labs(
+    x = "Threshold (%)",
+    y = "Corrected APG",
+  ) +
+  scale_color_manual(values = c("Primarily Informal" = "steelblue", "Primarily Formal" = "darkorange")) +
+  theme_minimal()
+
+figure1
+
+
+```
+
+
+##############Non-parametric Analysis########################################
+
+**data cleaning: generating APG4 file**
+
+There is no threshold and employment (or value added) based weighting in non-parametric analysis because we are not doing any aggregation. All numbers coming from NSS, PLFS, and IHDS data are survey weighted.  
+
+```{r}
+
+klems = read.csv("D:/Research/APG/revision1/data/KLEMS/cleaned/KLEMS_NSS_PLFS_IHDS_APG_workfile.csv")
+klems = klems %>%filter(!sector27 %in% c("coke_petro_nuclear", "admin_defense_socialsecurity"))
+ 
+
+klems$raw_APG1999_00=(klems$VA_r1999_00/klems$EMP1999_00)/(klems$VA_r1999_00[klems$sector27=="agri_forest_fish"]/klems$EMP1999_00[klems$sector27=="agri_forest_fish"])
+klems$raw_APG2004_05 = (klems$VA_r2004_05 / klems$EMP2004_05) / 
+  (klems$VA_r2004_05[klems$sector27 == "agri_forest_fish"] / klems$EMP2004_05[klems$sector27 == "agri_forest_fish"])
+klems$raw_APG2011_12 = (klems$VA_r2011_12 / klems$EMP2011_12) / 
+  (klems$VA_r2011_12[klems$sector27 == "agri_forest_fish"] / klems$EMP2011_12[klems$sector27 == "agri_forest_fish"])
+klems$raw_APG2018_19 = (klems$VA_r2018_19 / klems$EMP2018_19) / 
+  (klems$VA_r2018_19[klems$sector27 == "agri_forest_fish"] / klems$EMP2018_19[klems$sector27 == "agri_forest_fish"])
+klems$raw_APG2022_23 = (klems$VA_r2022_23 / klems$EMP2022_23) / 
+  (klems$VA_r2022_23[klems$sector27 == "agri_forest_fish"] / klems$EMP2022_23[klems$sector27 == "agri_forest_fish"])
+
+
+klems$Hcap_adj1999_00=  exp(0.07 * klems$edu_yrs1999_00)/(exp(0.07 * klems$edu_yrs1999_00[klems$sector27 == "agri_forest_fish"])) 
+klems$Hcap_adj2004_05 = exp(0.07 * klems$edu_yrs2004_05) /exp(0.07 * klems$edu_yrs2004_05[klems$sector27 =="agri_forest_fish"])
+klems$Hcap_adj2011_12 = exp(0.07 * klems$edu_yrs2011_12)/ exp(0.07 * klems$edu_yrs2011_12[klems$sector27 == "agri_forest_fish"])
+klems$Hcap_adj2018_19 = exp(0.07 * klems$edu_yrs2018_19)/exp(0.07 * klems$edu_yrs2018_19[klems$sector27 == "agri_forest_fish"])
+klems$Hcap_adj2022_23 = exp(0.07 * klems$edu_yrs2022_23)/exp(0.07 * klems$edu_yrs2022_23[klems$sector27 == "agri_forest_fish"])
+
+
+klems$hours_adj1999_00=klems$hours1999_00/klems$hours1999_00[klems$sector27=="agri_forest_fish"]
+klems$hours_adj2004_05=klems$hours2004_05/klems$hours2004_05[klems$sector27=="agri_forest_fish"]
+klems$hours_adj2011_12=klems$hours2011_12/klems$hours2011_12[klems$sector27=="agri_forest_fish"]
+klems$hours_adj2018_19=klems$hours2018_19/klems$hours2018_19[klems$sector27=="agri_forest_fish"]
+klems$hours_adj2022_23=klems$hours2022_23/klems$hours2022_23[klems$sector27=="agri_forest_fish"]
+
+
+klems$LSH_adj1999_00=klems$LSH_VA1999_00[klems$sector27=="agri_forest_fish"]/klems$LSH_VA1999_00
+klems$LSH_adj2004_05 = klems$LSH_VA2004_05[klems$sector27 == "agri_forest_fish"] / klems$LSH_VA2004_05
+klems$LSH_adj2011_12 = klems$LSH_VA2011_12[klems$sector27 == "agri_forest_fish"] / klems$LSH_VA2011_12
+klems$LSH_adj2018_19 = klems$LSH_VA2018_19[klems$sector27 == "agri_forest_fish"] / klems$LSH_VA2018_19
+klems$LSH_adj2022_23 = klems$LSH_VA2022_23[klems$sector27 == "agri_forest_fish"] / klems$LSH_VA2022_23
+
+
+klems$correct_APG1999_00=klems$raw_APG1999_00/(klems$Hcap_adj1999_00*klems$hours_adj1999_00*klems$LSH_adj1999_00)
+klems$correct_APG2004_05 = klems$raw_APG2004_05/(klems$Hcap_adj2004_05 * klems$hours_adj2004_05 * klems$LSH_adj2004_05)
+klems$correct_APG2011_12 = klems$raw_APG2011_12/(klems$Hcap_adj2011_12 * klems$hours_adj2011_12 * klems$LSH_adj2011_12)
+klems$correct_APG2018_19 = klems$raw_APG2018_19/(klems$Hcap_adj2018_19 * klems$hours_adj2018_19 * klems$LSH_adj2018_19)
+klems$correct_APG2022_23 = klems$raw_APG2022_23/(klems$Hcap_adj2022_23 * klems$hours_adj2022_23 * klems$LSH_adj2022_23)
+
+klems = klems[, c(
+  "sector27",
+   "unorg_1999_00", "unorg_2004_05", "unorg_2011_12" , "unorg_2018_19","unorg_2022_23", 
+  "raw_APG1999_00", "raw_APG2004_05", "raw_APG2011_12", "raw_APG2018_19", "raw_APG2022_23",
+  "Hcap_adj1999_00", "Hcap_adj2004_05", "Hcap_adj2011_12", "Hcap_adj2018_19", "Hcap_adj2022_23",
+  "hours_adj1999_00", "hours_adj2004_05", "hours_adj2011_12", "hours_adj2018_19", "hours_adj2022_23",
+  "LSH_adj1999_00", "LSH_adj2004_05", "LSH_adj2011_12", "LSH_adj2018_19", "LSH_adj2022_23",
+  "correct_APG1999_00", "correct_APG2004_05", "correct_APG2011_12", "correct_APG2018_19", "correct_APG2022_23"
+)]
+
+klems = klems %>% 
+  filter(sector27 != "agri_forest_fish")
+
+
+library(tidyr)
+library(dplyr)
+
+klems_long = klems %>%
+  pivot_longer(cols = -sector27, names_to = c(".value", "year"), names_pattern = "^([a-zA-Z_]+)(\\d{4}_\\d{2})$")
+klems_long= klems_long %>% rename(informal_emp_per = unorg_)
+
+
+#for non-parametric plot
+write.csv(klems_long, ("D:/Research/APG/revision1/data/KLEMS/cleaned/APG_to_UnOrgEmp_relation_Long.csv"), row.names = FALSE)
+
+
+##APG4: Successive adjustments
+
+klems_long$LSH_correct_APG=klems_long$raw_APG/klems_long$LSH_adj
+klems_long$LSH_Hours_correct_APG=klems_long$LSH_correct_APG/klems_long$hours_adj
+
+APG4=klems_long[,c("sector27", "informal_emp_per")]
+APG4$APG1=klems_long$raw_APG
+APG4$APG2=klems_long$LSH_correct_APG
+APG4$APG3=klems_long$LSH_Hours_correct_APG
+APG4$APG4=klems_long$correct_APG
+
+write.csv(APG4, "D:/Research/APG/revision1/data/KLEMS/cleaned/APG4.csv", row.names = FALSE)
+
+```
+
+*******************************************************************************
+*         Figure 2                                                           *
+*******************************************************************************
+
+
+
+*Import Libraries*
+
+```{r, warning=F}
+library('np')
+library("readxl")
+#install.packages('haven')
+#library('haven')
+```
+
+
+
+# Non-Linear Function Estimation
+
+Let's call the corrected APG i.e. our `target` variable $y$. Under perfect mobility across sectors assumption, we should have $y=1$. Let our independent variable $x$ is the proportion of a sector's employment in informal segment. We aim to estimate the relationship between the variables $y$ and $x$. Ideally, $y=f(x)=1$. Therefore, we define the null hypothesis as follows: 
+
+$$
+H_0 : \quad f(x) =1  \quad \quad \text{for all } x
+$$
+
+
+```{r}
+library(np)
+df = read.csv("D:/Research/APG/revision1/data/KLEMS/cleaned/APG_to_UnOrgEmp_relation_Long.csv")
+
+y=df$correct_APG 
+x=df$informal_emp_per/100
+
+
+#Functional form estimation : unexplained APG with share of labor share in informal
+bw_cv = npregbw(y~x, tol=.1,ftol=.1, regtype = 'll')  #bandwidth selection
+model.np_cv = npreg(bws = bw_cv, gradients = TRUE)    #model fitting 
+
+npplot(bws=bw_cv, plot.errors.method="bootstrap",plot.errors.boot.num=100,xlab="Proportion of employment that is informal", 
+       ylab="Corrected APG")
+abline(v=0.76, col="darkgreen", lty=2, lwd=2)
+abline(h = 1, col = "red")
+
+```
+
+
+
+*Inferences*
+
+1. We can reject the null hypothesis for the value of majority of the values of $x$, to be specific for $x \in (0,0.76)$. Because the confidence interval does not include the null-hypothesis value of $f(x) =1$ 
+
+2. As Proportion of Employment in Informal Sector approaches to unity, we fail to reject the null hypothesis $f(x)=1$, meaning that there is no productivity gap between agriculture sector and highly informal non-agriculture sectors. 
+
+
+***Technical Comments and References***
+
+1. How do we get the confidence interval : using bootstrap method. 
+
+
+2. We use Robinson(1983)'s Local Linear non-parametric functional form estimation method. Optimal bandwidth is selected. 
+
+
+
+***********************************************************************************
+*Figure A2: Agricultural Productivity Gap and Employment Proportion in Informal Sector (Interpolated all years: 600 datapoints)*
+***********************************************************************************
+
+
+Value added per worker and labor share in value added data is available for all years in KLEMS dataset. We obtain the remaining variables by interpolation, the interpolation method is described in the paper.  
+
+
+```{r}
+library(np)
+df=read.csv("D:/Research/APG/revision1/data/Interploted_APG_sect27.csv")
+
+y=df$correct_APG 
+x=df$informal_emp_per/100
+
+#Functional form estimation : unexplained APG with share of labor share in informal
+library(np)
+bw_cv = npregbw(y~x, tol=.1,ftol=.1, regtype = 'll')  #bandwidth selection
+bw_manual=bw_cv
+#bw_manual$bw = bw_cv$bw * 2    # Increase bandwidth for smoother plot
+
+model.np_cv = npreg(bws = bw_cv, gradients = TRUE)    #model fitting 
+
+npplot(bws = bw_manual, plot.errors.method = "bootstrap", plot.errors.boot.num = 100,
+       xlab = "Proportion of employment that is informal", ylab = "Corrected APG")
+#npplot(bws=bw_cv, plot.errors.method="bootstrap",plot.errors.boot.num=100,xlab="Proportion of employment that is informal",        ylab="Corrected APG")
+abline(h = 1, col = "red")
+```
+
+
+
+
+
+
+
+
+
+*******************************************************************************
+*         Figure 3                                                           *
+*******************************************************************************
+
+
+```{r}
+library(ggplot2)
+library(reshape2)
+library(np)  # For kernel regression
+
+# Example: compute kernel regression for each Variable
+smoothed_data = do.call(rbind, lapply(split(melted_data, melted_data$Variable), function(df) {
+  # Fit nonparametric kernel regression
+  fit = npreg(Value ~ informal_emp_per, data = df, regtype = "lc", ckertype = "gaussian")
+  
+  # Predict on a grid for smooth plotting
+  grid = data.frame(informal_emp_per = seq(min(df$informal_emp_per), max(df$informal_emp_per), length.out = 200))
+  pred = predict(fit, newdata = grid)
+  
+  data.frame(informal_emp_per = grid$informal_emp_per, Value = pred, Variable = unique(df$Variable))
+}))
+
+# Plot with kernel smoothed line instead of LOESS
+p3 = ggplot(melted_data, aes(x = informal_emp_per, y = Value, color = Variable)) +
+  geom_point() +
+  geom_line(data = smoothed_data, aes(x = informal_emp_per, y = Value, color = Variable), linewidth = 1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  scale_y_continuous(breaks = y_breaks) +
+  labs(x = "Proportion of employment that is informal", y = "Productivity Gap") +
+  theme_minimal() +
+  guides(color = guide_legend(nrow = length(custom_names), byrow = TRUE)) +
+  theme(
+    legend.key.height = unit(0.2, "cm"),
+    legend.spacing.y = unit(0.1, "cm"),
+    legend.position = "right"
+  )
+
+
+file_path = "D:/Research/APG/revision1/drafts/figures/figure3.jpg"
+ggsave(file_path, plot = p3, width = 12, height = 8, units = "in", dpi = 300)
+
+p3
+```
+
+
+**********************************************************************************
+*Table-6: Percentage of Non-Farm Employment in Industry Divisions whose APG is
+not statistically different from 1*
+**********************************************************************************
+
+
+
+```{r}
+library(haven)
+library(dplyr)
+
+highly_inform_labor = function(file_path, threshold_new = 76) {
+  emp_cols = c("EMP1999_00", "EMP2004_05", "EMP2011_12", "EMP2018_19", "EMP2022_23")
+  informal_cols = gsub("EMP", "unorg_", emp_cols)
+  df_non_agri = df %>% filter(sector27 != "agri_forest_fish")
+  result = numeric(length(emp_cols))
+  names(result) = gsub("EMP", "", emp_cols)
+
+  for (i in seq_along(emp_cols)) {
+    emp_col = emp_cols[i]
+    informal_col = informal_cols[i]
+    if (!(informal_col %in% colnames(df))) stop(paste("Column", informal_col, "not found in dataset."))
+    df_non_agri$informal_flag = ifelse(df_non_agri[[informal_col]] > threshold_new, 1, 0)
+    total_emp = sum(df_non_agri[[emp_col]], na.rm = TRUE)
+    inform_emp = sum(df_non_agri[[emp_col]] * df_non_agri$informal_flag, na.rm = TRUE)
+    result[i] = 100 * inform_emp / total_emp
+  }
+
+  return(as.data.frame(t(result)))
+}
+
+
+df= read.csv("D:/Research/APG/revision1/data/KLEMS/cleaned/KLEMS_NSS_PLFS_IHDS_APG_workfile.csv")
+
+thres=76 
+round(highly_inform_labor(df, thres),2)
+
+```
+
+
+
+
+
+
+
+*******************************************************************************
+* Table-5: Wage Gaps
+******************************************************************************
+
+
+
+```{r}
+avg_wage_EMP_dev_wt = function(df, threshold = 66) {
+  library(haven)
+  library(dplyr)
+
+  klems = df
+
+  # Filter sectors
+  klems = klems %>% filter(!sector27 %in% c("coke_petro_nuclear", "admin_defense_socialsecurity"))
+
+  # Define 3-year focus
+  years_va = c("1999_00", "2004_05", "2011_12", "2018_19", "2022_23")
+  years = c("1999", "2004", "2011", "2018", "2022")
+
+  emp_vars = paste0("EMP", years_va)
+  edu_vars = paste0("edu_yrs", years_va)
+  hours_vars = paste0("hours", years_va)
+  wage_vars = paste0("wage", years_va)
+
+  # Weighting logic
+  for (i in seq_along(years)) {
+    yr = years[i]
+    yr_va = years_va[i]
+    emp_var = emp_vars[i]
+
+    # Representativeness indicators
+    klems[[paste0("unorg_rep", yr)]] = as.integer(klems[[paste0("unorg_", yr_va)]] > threshold & klems$sector27 != "agri_forest_fish")
+    klems[[paste0("org_", yr_va)]] = 100 - klems[[paste0("unorg_", yr_va)]]
+    klems[[paste0("org_rep", yr)]] = as.integer(klems[[paste0("org_", yr_va)]] > threshold & klems$sector27 != "agri_forest_fish")
+
+    # --- UNORG Weights ---
+    EMP_unorg = klems[[emp_var]] * klems[[paste0("unorg_rep", yr)]]
+    total_EMP_unorg = sum(EMP_unorg, na.rm = TRUE)
+    klems[[paste0("w_labor_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1, EMP_unorg / total_EMP_unorg, 0)
+
+    deviation_sq_unorg = (klems[[paste0("unorg_", yr_va)]] - threshold)^2
+    deviation_sq_unorg[is.na(deviation_sq_unorg)] = 0
+    deviation_sq_unorg = deviation_sq_unorg * klems[[paste0("unorg_rep", yr)]]
+    total_dev_unorg = sum(deviation_sq_unorg, na.rm = TRUE)
+    klems[[paste0("w_dev_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1, deviation_sq_unorg / total_dev_unorg, 0)
+
+    klems[[paste0("w_tilde_unorg_", yr)]] = klems[[paste0("w_labor_unorg_", yr)]] * klems[[paste0("w_dev_unorg_", yr)]]
+    total_wtilde_unorg = sum(klems[[paste0("w_tilde_unorg_", yr)]], na.rm = TRUE)
+    klems[[paste0("w_star_unorg_", yr)]] = ifelse(klems[[paste0("unorg_rep", yr)]] == 1, klems[[paste0("w_tilde_unorg_", yr)]] / total_wtilde_unorg, 0)
+
+    # --- ORG Weights ---
+    EMP_org = klems[[emp_var]] * klems[[paste0("org_rep", yr)]]
+    total_EMP_org = sum(EMP_org, na.rm = TRUE)
+    klems[[paste0("w_labor_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1, EMP_org / total_EMP_org, 0)
+
+    deviation_sq_org = (klems[[paste0("org_", yr_va)]] - threshold)^2
+    deviation_sq_org[is.na(deviation_sq_org)] = 0
+    deviation_sq_org = deviation_sq_org * klems[[paste0("org_rep", yr)]]
+    total_dev_org = sum(deviation_sq_org, na.rm = TRUE)
+    klems[[paste0("w_dev_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1, deviation_sq_org / total_dev_org, 0)
+
+    klems[[paste0("w_tilde_org_", yr)]] = klems[[paste0("w_labor_org_", yr)]] * klems[[paste0("w_dev_org_", yr)]]
+    total_wtilde_org = sum(klems[[paste0("w_tilde_org_", yr)]], na.rm = TRUE)
+    klems[[paste0("w_star_org_", yr)]] = ifelse(klems[[paste0("org_rep", yr)]] == 1, klems[[paste0("w_tilde_org_", yr)]] / total_wtilde_org, 0)
+
+    # Compute WAGE using EMPxdev^2 weights
+    wage_var = wage_vars[i]
+    assign(paste0("wage_unorg_", yr, "_th_", threshold), sum(klems[[paste0("w_star_unorg_", yr)]] * klems[[wage_var]], na.rm = TRUE), envir = .GlobalEnv)
+    assign(paste0("wage_org_", yr, "_th_", threshold), sum(klems[[paste0("w_star_org_", yr)]] * klems[[wage_var]], na.rm = TRUE), envir = .GlobalEnv)
+    
+    # Hours
+    hours_var = hours_vars[i]
+    assign(paste0("hours_unorg_", yr, "_th_", threshold), sum(klems[[paste0("w_star_unorg_", yr)]] * klems[[hours_var]], na.rm = TRUE), envir = .GlobalEnv)
+    assign(paste0("hours_org_", yr, "_th_", threshold), sum(klems[[paste0("w_star_org_", yr)]] * klems[[hours_var]], na.rm = TRUE), envir = .GlobalEnv)
+    
+    # Education
+    edu_var = edu_vars[i]
+    assign(paste0("edu_yrs_unorg_", yr, "_th_", threshold), sum(klems[[paste0("w_star_unorg_", yr)]] * klems[[edu_var]], na.rm = TRUE), envir = .GlobalEnv)
+    assign(paste0("edu_yrs_org_", yr, "_th_", threshold), sum(klems[[paste0("w_star_org_", yr)]] * klems[[edu_var]], na.rm = TRUE), envir = .GlobalEnv)
+    
+    wage_agri = mean(klems[klems$sector27 == "agri_forest_fish", ][[wage_var]], na.rm = TRUE)
+    hours_agri = mean(klems[klems$sector27 == "agri_forest_fish", ][[hours_var]], na.rm = TRUE)
+    edu_agri   = mean(klems[klems$sector27 == "agri_forest_fish", ][[edu_var]], na.rm = TRUE)
+    
+    assign(paste0("wage_agri_", yr, "_th_", threshold), wage_agri, envir = .GlobalEnv)
+    assign(paste0("hours_agri_", yr, "_th_", threshold), hours_agri, envir = .GlobalEnv)
+    assign(paste0("edu_yrs_agri_", yr, "_th_", threshold), edu_agri, envir = .GlobalEnv)
+
+
+  }
+
+  # Return summary tibble
+  tibble(
+    year = years,
+    WAGE_agri = sapply(years, function(yr) get(paste0("wage_agri_", yr, "_th_", threshold))),
+    WAGE_unorg = sapply(years, function(yr) get(paste0("wage_unorg_", yr, "_th_", threshold))),
+    WAGE_org = sapply(years, function(yr) get(paste0("wage_org_", yr, "_th_", threshold))),
+    EDU_agri = sapply(years, function(yr) get(paste0("edu_yrs_agri_", yr, "_th_", threshold))),
+    EDU_unorg = sapply(years, function(yr) get(paste0("edu_yrs_unorg_", yr, "_th_", threshold))),
+    EDU_org = sapply(years, function(yr) get(paste0("edu_yrs_org_", yr, "_th_", threshold))),
+    HOURS_agri = sapply(years, function(yr) get(paste0("hours_agri_", yr, "_th_", threshold))),
+    HOURS_unorg = sapply(years, function(yr) get(paste0("hours_unorg_", yr, "_th_", threshold))),
+    HOURS_org = sapply(years, function(yr) get(paste0("hours_org_", yr, "_th_", threshold)))
+  ) %>% mutate(threshold = threshold)
+}
+
+
+
+
+#wages across years are not comparable.
+
+library(haven)
+
+df=read_dta("D:/Research/APG/revision1/data/PLFS/cleaned/wage.dta")
+
+
+
+klems = read.csv("D:/Research/APG/revision1/data/KLEMS/cleaned/KLEMS_NSS_PLFS_IHDS_APG_workfile.csv")
+df=merge(df, klems, by = "sector27")  
+df=avg_wage_EMP_dev_wt(df, 66)
+
+
+
+df$unorg_raw_wage_Gap=df$WAGE_unorg/df$WAGE_agri
+
+df$org_raw_wage_Gap=df$WAGE_org/df$WAGE_agri
+
+
+df$unorg_hours_adj_fact = round(df$HOURS_unorg / df$HOURS_agri, 3)
+df$org_hours_adj_fact   = round(df$HOURS_org / df$HOURS_agri, 3)
+#df$unorg_hours_adj_fact[df$year %in% c(2018, 2022)] = 1  #wages are already hourly
+#df$org_hours_adj_fact[df$year %in% c(2018, 2022)] = 1    #wages are already hourly
+
+df$unorg_raw_wage_Gap[df$year %in% c(2018, 2022)] =
+  (df$WAGE_unorg[df$year %in% c(2018, 2022)] / df$WAGE_agri[df$year %in% c(2018, 2022)]) *
+  df$unorg_hours_adj_fact[df$year %in% c(2018, 2022)]   #because wages for 2018 and 2022 are hourly
+
+df$org_raw_wage_Gap[df$year %in% c(2018, 2022)] =
+  (df$WAGE_org[df$year %in% c(2018, 2022)] / df$WAGE_agri[df$year %in% c(2018, 2022)]) *
+  df$org_hours_adj_fact[df$year %in% c(2018, 2022)]   #because wages for 2018 and 2022 are hourly
+
+df$unorg_Hcap_adj_fact = round(exp(0.07 * df$EDU_unorg) / exp(0.07 * df$EDU_agri), 3)
+df$org_Hcap_adj_fact   = round(exp(0.07 * df$EDU_org) / exp(0.07 * df$EDU_agri), 3)
+
+df$unorg_correct_wage_gap=df$unorg_raw_wage_Gap/(df$unorg_hours_adj_fact*df$unorg_Hcap_adj_fact )
+df$org_correct_wage_gap=df$org_raw_wage_Gap/(df$org_hours_adj_fact*df$org_Hcap_adj_fact )
+
+
+cat("\n The First row of Table-5 is: ", df$unorg_raw_wage_Gap)
+cat("\n The Second row of Table-5 is: ", df$unorg_correct_wage_gap)
+cat("\n The Third row of Table-5 is: ", df$org_raw_wage_Gap)
+cat("\n The Fourth row of Table-5 is: ", df$org_correct_wage_gap)
+
+```
+
+*Note*: In some earlier online version the paper, we noticed minor error in the Table-5. The first and third rows of the table-5 should read as ``Raw Wage Gaps`` and the numbers for last two years are different. All other numbers and descriptions remains the same. The updated numbers are printed above.
+
+
+
+
+
+*********************************************************************************
+* Table-A1: The Distribution of Informal Employment
+*********************************************************************************
+
+
+
+***Mapping of the Informality Definition***
+
+Paper's definition of informality is: 
+
+gen org=.
+replace org=0 if ( pr_no_workers==1 | pr_no_workers==2)
+replace org=1 if ( pr_no_workers==3 | pr_no_workers==4)
+replace org=1 if (pr_social_security_benefits<8)
+replace org=1 if (pr_enterprise_type==5 | pr_enterprise_type==6 | pr_enterprise_type==8 )
+
+
+```{r}
+informality_mapping_12_19_23 = function(df) {
+  #in all variables 0 is corresponding to the informality or charactertics of informality
+  df$size_10 = ifelse(df$pr_no_workers %in% c(1, 2), 0,
+                      ifelse(df$pr_no_workers %in% c(3, 4), 1, NA))
+  
+  df$SS_benefit = ifelse(df$pr_social_security_benefits == 8, 0,
+                        ifelse(df$pr_social_security_benefits < 8, 1, NA))
+  
+  df$contract = ifelse(df$pr_job_contract %in% c(1), 0, 
+                       ifelse(df$pr_job_contract %in% c(2,3,4), 1, NA))
+  
+  df$location = ifelse(df$pr_location_wrk_place %in% c(14, 16, 24, 26), 1,
+                       ifelse(!is.na(df$pr_location_wrk_place), 0, NA))
+  
+  df$ent_type = ifelse(df$pr_enterprise_type %in% c(1, 2, 3, 12), 0,
+                       ifelse(df$pr_enterprise_type %in% c(5, 6, 8), 1, NA))
+  
+  
+  df$paid_leave = ifelse(df$pr_eligble_paid_leave %in% c(2), 0,               # 2 means not eligible for paid leave
+                         ifelse(df$pr_eligble_paid_leave %in% c(1), 1, NA))
+  
+  vars = c("org", "size_10", "SS_benefit", "contract", "location", "ent_type", "paid_leave")
+  #vars = c("org", "size_10", "SS_benefit", "contract", "location", "ent_type",  "paid_leave")
+  
+  n = length(vars)
+  table = matrix(NA, nrow = n, ncol = n)
+  rownames(table) = vars
+  colnames(table) = vars
+  
+  for (i in seq_len(n)) {
+    for (j in seq_len(n)) {
+      if (i == j) {
+        table[i, j] = 100
+      } else {
+        row_var = df[[vars[i]]]
+        col_var = df[[vars[j]]]
+        valid_idx = !is.na(row_var) & !is.na(col_var) & (col_var == 0)
+        if (sum(valid_idx) > 0) {
+          table[i, j] = mean(row_var[valid_idx] == 0) * 100
+        } else {
+          table[i, j] = NA
+        }
+      }
+    }
+  }
+  
+  return(round(t(table), 2))
+}
+
+
+
+library(haven)
+library(dplyr)
+
+
+df22=read_dta("D:/Research/APG/revision1/data/PLFS/raw/PER_V1_22_23_clean1.dta")
+df22 = df22 %>%rename(pr_location_wrk_place = pr_location_workplace,pr_eligble_paid_leave =pr_eligible_paid_leave)
+
+
+table22=informality_mapping_12_19_23(df22)
+
+print(table22)
+
+```
+
+
+
+
+
+
+For remaining plots and table:  figure-4, figure-5,6 and figure-A4 and table-7 please use Stata do file. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
